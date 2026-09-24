@@ -49,6 +49,12 @@ somewhere might still ask for it.
     npm run db:seed                    # demo@example.com / "correct horse battery staple", client "demo-app"
     npm run dev                        # :3000
 
+Or the image, pointed at your own Postgres and issuer URL:
+
+    docker run --rm -p 3000:3000 \
+      -e DATABASE_URL=postgresql://... -e ISSUER=https://id.example.com \
+      ghcr.io/sriharifortitude/idbroker:0.1
+
 Registering a real client (not the seeded demo one) is a CLI command,
 deliberately not an HTTP endpoint — see
 [ADR 1's](docs/adr/0001-opaque-revocable-tokens.md) reasoning applied to
