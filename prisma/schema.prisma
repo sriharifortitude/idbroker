@@ -1,0 +1,132 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ClientType {
+  CONFIDENTIAL
+  PUBLIC
+}
+
+model User {
+  id            String              @id @default(uuid())
+  email         String              @unique
+  passwordHash  String
+  createdAt     DateTime            @default(now())
+  sessions      Session[]
+  authCodes     AuthorizationCode[]
+  refreshTokens RefreshToken[]
+  accessTokens  AccessToken[]
+}
+
+/// A registered OAuth client. redirectUris is an exact-match allowlist --
+/// no prefix or wildcard matching, ever (see docs/adr).
+model Client {
+  id            String              @id
+  name          String
+  type          ClientType
+  /// null for a PUBLIC client (a browser or native app that cannot keep a
+  /// secret); required for CONFIDENTIAL.
+  secretHash    String?
+  redirectUris  String[]
+  createdAt     DateTime            @default(now())
+  authCodes     AuthorizationCode[]
+  refreshTokens RefreshToken[]
+  accessTokens  AccessToken[]
+}
+
+/// Single-use, short-lived. usedAt is set the instant one is redeemed;
+/// a second redemption attempt is treated as interception, not a retry
+/// -- per the OAuth 2.0 Security BCP, every token that first redemption
+/// produced must be revoked too, which is what issuedFamilyId (set at
+/// that first redemption) exists to find.
+model AuthorizationCode {
+  id              String    @id @default(uuid())
+  codeHash        String    @unique
+  clientId        String
+  client          Client    @relation(fields: [clientId], references: [id])
+  userId          String
+  user            User      @relation(fields: [userId], references: [id])
+  redirectUri     String
+  scope           String
+  codeChallenge   String
+  nonce           String?
+  usedAt          DateTime?
+  issuedFamilyId  String?
+  expiresAt       DateTime
+  createdAt       DateTime  @default(now())
+
+  @@index([clientId])
+}
+
+/// familyId is shared by every token descended from one authorization
+/// grant. Rotating sets replacedByHash on the old row and inserts a new
+/// row in the same family; presenting a token that already has
+/// replacedByHash set means the token was stolen, and the whole family
+/// is revoked. See docs/adr/0002.
+model RefreshToken {
+  id             String    @id @default(uuid())
+  tokenHash      String    @unique
+  familyId       String
+  clientId       String
+  client         Client    @relation(fields: [clientId], references: [id])
+  userId         String
+  user           User      @relation(fields: [userId], references: [id])
+  scope          String
+  replacedByHash String?
+  revokedAt      DateTime?
+  expiresAt      DateTime
+  createdAt      DateTime  @default(now())
+
+  @@index([familyId])
+}
+
+/// Opaque and DB-backed, not a JWT -- see
+/// docs/adr/0001-opaque-revocable-tokens.md. Looking one up is the cost
+/// of being able to revoke it; that trade is made deliberately here.
+/// familyId matches its sibling refresh token's, so revoking a family
+/// (rotation reuse, an authorization-code replay, an explicit logout)
+/// is one query against each table, not a token-by-token walk.
+model AccessToken {
+  id        String    @id @default(uuid())
+  tokenHash String    @unique
+  familyId  String
+  clientId  String
+  client    Client    @relation(fields: [clientId], references: [id])
+  userId    String
+  user      User      @relation(fields: [userId], references: [id])
+  scope     String
+  revokedAt DateTime?
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+
+  @@index([familyId])
+}
+
+/// The browser login session at idbroker itself -- separate from any
+/// OAuth token issued to a client. Opaque and hashed at rest, same as
+/// every other credential this service stores.
+model Session {
+  id        String   @id @default(uuid())
+  tokenHash String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+/// The RS256 signing key set behind /jwks.json. A key with retiredAt set
+/// stops signing new ID tokens but stays published until every token it
+/// ever signed has expired, so in-flight verifications keep working.
+model SigningKey {
+  kid        String    @id
+  privateJwk String
+  publicJwk  String
+  algorithm  String    @default("RS256")
+  createdAt  DateTime  @default(now())
+  retiredAt  DateTime?
+}
